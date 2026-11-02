@@ -7,6 +7,8 @@ import azure.functions as func
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
+# In-memory repository: a plain list that holds every game while the app is running.
+# There is no database, so data is lost when the app restarts or scales.
 games = []
 
 REQUIRED_FIELDS = ["title", "developer", "releaseDate", "price"]
