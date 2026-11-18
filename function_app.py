@@ -1,9 +1,12 @@
 import hmac
 import json
+import logging
 import os
 import uuid
 
 import azure.functions as func
+
+from db import get_connection
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -162,3 +165,21 @@ def games_item(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "PUT":
         return update_game(req, game_id)
     return delete_game(req, game_id)
+
+
+@app.route(route="dbtest", methods=["GET"])
+def db_test(req: func.HttpRequest) -> func.HttpResponse:
+    """TEMPORARY: proves the app can reach Azure SQL. Delete after Tuesday."""
+    auth_error = check_api_key(req)
+    if auth_error:
+        return auth_error
+    try:
+        conn = get_connection()
+        try:
+            row = conn.cursor().execute("SELECT DB_NAME(), SUSER_SNAME()").fetchone()
+        finally:
+            conn.close()
+        return json_response({"status": "connected", "database": row[0], "connectedAs": row[1]})
+    except Exception as exc:
+        logging.exception("Database connection test failed")
+        return json_response({"status": "failed", "error": type(exc).__name__, "detail": str(exc)}, 500)
