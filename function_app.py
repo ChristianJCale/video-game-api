@@ -2,19 +2,13 @@ import hmac
 import json
 import logging
 import os
-import uuid
 
 import azure.functions as func
 
-from db import get_connection
+import repository
+from validation import normalize_game_id, validate_game
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
-
-# In-memory repository: a plain list that holds every game while the app is running.
-# There is no database, so data is lost when the app restarts or scales.
-games = []
-
-REQUIRED_FIELDS = ["title", "developer", "releaseDate", "price"]
 
 
 def json_response(body, status_code=200):
@@ -49,32 +43,26 @@ def check_api_key(req: func.HttpRequest):
     return None
 
 
-def validate_game(data):
-    """Return an error message if the game data is invalid, otherwise None."""
-    if not isinstance(data, dict):
-        return "Request body must be a JSON object."
+def error_response_for(exc):
+    """Log an unexpected error and return a safe, generic response.
 
-    missing = [
-        field for field in REQUIRED_FIELDS
-        if field not in data or data[field] in (None, "")
-    ]
-    if missing:
-        return f"Missing required field(s): {', '.join(missing)}."
-
-    for field in ("title", "developer", "releaseDate"):
-        if not isinstance(data[field], str):
-            return f"'{field}' must be a string."
-
-    price = data["price"]
-    # bool is a subclass of int in Python, so exclude it explicitly
-    if isinstance(price, bool) or not isinstance(price, (int, float)):
-        return "'price' must be a number."
-    if price < 0:
-        return "'price' cannot be negative."
-
-    return None
+    Must be called from inside an except block so the traceback is logged.
+    The client never sees database details or stack traces.
+    """
+    if isinstance(exc, repository.DatabaseUnavailableError):
+        logging.exception("Database unavailable")
+        return json_response(
+            {"error": "Database temporarily unavailable. Please try again."}, 503
+        )
+    logging.exception("Unexpected error")
+    return json_response({"error": "Internal server error."}, 500)
 
 
+def not_found_response(game_id):
+    return json_response({"error": f"Game with id '{game_id}' not found."}, 404)
+
+
+# Routes for the collection: /api/games
 def create_game(req: func.HttpRequest) -> func.HttpResponse:
     """POST /api/games -- create a new game."""
     try:
@@ -86,20 +74,13 @@ def create_game(req: func.HttpRequest) -> func.HttpResponse:
     if error:
         return json_response({"error": error}, 400)
 
-    game = {
-        "id": str(uuid.uuid4()),  # the server generates the unique ID
-        "title": data["title"],
-        "developer": data["developer"],
-        "releaseDate": data["releaseDate"],
-        "price": data["price"],
-    }
-    games.append(game)
-    return json_response(game, 201)
+    # The server generates the UUID; upcoming, isFree and validatedOn start at their defaults
+    return json_response(repository.create_game(data), 201)
 
 
 def list_games(req: func.HttpRequest) -> func.HttpResponse:
     """GET /api/games -- return all games."""
-    return json_response(games, 200)
+    return json_response(repository.list_games(), 200)
 
 
 @app.route(route="games", methods=["GET", "POST"])
@@ -108,25 +89,28 @@ def games_collection(req: func.HttpRequest) -> func.HttpResponse:
     if auth_error:
         return auth_error
 
-    if req.method == "POST":
-        return create_game(req)
-    return list_games(req)
+    try:
+        if req.method == "POST":
+            return create_game(req)
+        return list_games(req)
+    except Exception as exc:
+        return error_response_for(exc)
 
 
 # Routes for a single game: /api/games/{id}
-def find_game(game_id):
-    """Return the game with this ID, or None if it doesn't exist."""
-    for game in games:
-        if game["id"] == game_id:
-            return game
-    return None
+def get_game(game_id: str) -> func.HttpResponse:
+    """GET /api/games/{id} -- return one game."""
+    game = repository.get_game(game_id)
+    if game is None:
+        return not_found_response(game_id)
+    return json_response(game, 200)
 
 
 def update_game(req: func.HttpRequest, game_id: str) -> func.HttpResponse:
-    """PUT /api/games/{id} -- replace the fields of an existing game."""
-    game = find_game(game_id)
-    if game is None:
-        return json_response({"error": f"Game with id '{game_id}' not found."}, 404)
+    """PUT /api/games/{id} -- replace the editable fields of an existing game."""
+    # Existence is checked first so a missing game is always 404, even with a bad body
+    if repository.get_game(game_id) is None:
+        return not_found_response(game_id)
 
     try:
         data = req.get_json()
@@ -137,49 +121,36 @@ def update_game(req: func.HttpRequest, game_id: str) -> func.HttpResponse:
     if error:
         return json_response({"error": error}, 400)
 
-    # Update the stored game in place
-    game["title"] = data["title"]
-    game["developer"] = data["developer"]
-    game["releaseDate"] = data["releaseDate"]
-    game["price"] = data["price"]
+    game = repository.update_game(game_id, data)
+    if game is None:  # deleted by someone else between the two calls
+        return not_found_response(game_id)
     return json_response(game, 200)
 
 
-def delete_game(req: func.HttpRequest, game_id: str) -> func.HttpResponse:
+def delete_game(game_id: str) -> func.HttpResponse:
     """DELETE /api/games/{id} -- remove a game."""
-    game = find_game(game_id)
-    if game is None:
-        return json_response({"error": f"Game with id '{game_id}' not found."}, 404)
-
-    games.remove(game)
+    if not repository.delete_game(game_id):
+        return not_found_response(game_id)
     return json_response({"message": "Game deleted.", "id": game_id}, 200)
 
 
-@app.route(route="games/{id}", methods=["PUT", "DELETE"])
+@app.route(route="games/{id}", methods=["GET", "PUT", "DELETE"])
 def games_item(req: func.HttpRequest) -> func.HttpResponse:
     auth_error = check_api_key(req)
     if auth_error:
         return auth_error
 
-    game_id = req.route_params.get("id")
-    if req.method == "PUT":
-        return update_game(req, game_id)
-    return delete_game(req, game_id)
+    raw_id = req.route_params.get("id")
+    game_id = normalize_game_id(raw_id)
+    if game_id is None:
+        # Not a UUID, so it can't exist: same 404 as any other unknown id
+        return not_found_response(raw_id)
 
-
-@app.route(route="dbtest", methods=["GET"])
-def db_test(req: func.HttpRequest) -> func.HttpResponse:
-    """TEMPORARY: proves the app can reach Azure SQL. Delete after Tuesday."""
-    auth_error = check_api_key(req)
-    if auth_error:
-        return auth_error
     try:
-        conn = get_connection()
-        try:
-            row = conn.cursor().execute("SELECT DB_NAME(), SUSER_SNAME()").fetchone()
-        finally:
-            conn.close()
-        return json_response({"status": "connected", "database": row[0], "connectedAs": row[1]})
+        if req.method == "GET":
+            return get_game(game_id)
+        if req.method == "PUT":
+            return update_game(req, game_id)
+        return delete_game(game_id)
     except Exception as exc:
-        logging.exception("Database connection test failed")
-        return json_response({"status": "failed", "error": type(exc).__name__, "detail": str(exc)}, 500)
+        return error_response_for(exc)
