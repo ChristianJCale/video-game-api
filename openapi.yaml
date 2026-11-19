@@ -1,0 +1,294 @@
+openapi: 3.0.3
+info:
+  title: Video Game API
+  version: 2.0.0
+  description: |
+    REST API for managing a collection of video games, running on Azure Functions
+    with Azure SQL Database for persistent storage.
+
+    Every request needs a valid `x-api-key` header.
+
+    Endpoints are added here as they are built. Still to come:
+    `PATCH /games/validate` (batch validation rules).
+servers:
+  - url: https://{functionApp}/api
+    description: Azure Function App
+    variables:
+      functionApp:
+        default: your-function-app.azurewebsites.net
+        description: Default domain of the deployed Function App
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: Games
+    description: Create, read, update and delete games
+
+paths:
+  /games:
+    get:
+      tags: [Games]
+      summary: List all games
+      operationId: listGames
+      responses:
+        "200":
+          description: All games, ordered by title, then release date.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Game"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/DatabaseUnavailable"
+    post:
+      tags: [Games]
+      summary: Create a game
+      description: |
+        The server generates the game's UUID. `upcoming`, `isFree` and `validatedOn`
+        are server-managed; any values sent for them are ignored.
+      operationId: createGame
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GameInput"
+            example:
+              title: Hollow Knight
+              developer: Team Cherry
+              releaseDate: "2017-02-24"
+              price: 14.99
+              imageUrl: https://example.com/images/hollow-knight.jpg
+      responses:
+        "201":
+          description: The created game, including its new `id`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Game"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/DatabaseUnavailable"
+
+  /games/{id}:
+    parameters:
+      - $ref: "#/components/parameters/GameId"
+    get:
+      tags: [Games]
+      summary: Get one game
+      operationId: getGame
+      responses:
+        "200":
+          description: The requested game.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Game"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/DatabaseUnavailable"
+    put:
+      tags: [Games]
+      summary: Update a game
+      description: |
+        Replaces `title`, `developer`, `releaseDate` and `price`. `imageUrl` is optional:
+        leave it out to keep the current value, or send `null` to clear it.
+        A missing game returns 404 even if the request body is also invalid.
+        `upcoming`, `isFree` and `validatedOn` are not changed by this request; they are
+        recalculated the next time the validation endpoint runs.
+      operationId: updateGame
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GameInput"
+      responses:
+        "200":
+          description: The updated game.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Game"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/DatabaseUnavailable"
+    delete:
+      tags: [Games]
+      summary: Delete a game
+      operationId: deleteGame
+      responses:
+        "200":
+          description: The game was deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Game deleted.
+                  id:
+                    type: string
+                    format: uuid
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/DatabaseUnavailable"
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+
+  parameters:
+    GameId:
+      name: id
+      in: path
+      required: true
+      description: |
+        The game's UUID. A value that is not a valid UUID is treated like any other
+        unknown id and returns 404.
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    GameInput:
+      type: object
+      required: [title, developer, releaseDate, price]
+      properties:
+        title:
+          type: string
+          maxLength: 200
+        developer:
+          type: string
+          maxLength: 200
+        releaseDate:
+          type: string
+          format: date
+          description: A real calendar date in YYYY-MM-DD format.
+          example: "2017-02-24"
+        price:
+          type: number
+          minimum: 0
+          maximum: 99999999.99
+          description: At most 2 decimal places.
+          example: 14.99
+        imageUrl:
+          type: string
+          nullable: true
+          maxLength: 500
+          description: Optional. Must start with http:// or https://.
+    Game:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          example: 3f2b8c1e-5a47-4d0e-9c1b-7a6e2d4f8b90
+        title:
+          type: string
+        developer:
+          type: string
+        releaseDate:
+          type: string
+          format: date
+        price:
+          type: number
+        upcoming:
+          type: boolean
+          readOnly: true
+          description: True when the release date is in the future (set by the validation endpoint).
+        isFree:
+          type: boolean
+          readOnly: true
+          description: True when the price is 0 (set by the validation endpoint).
+        validatedOn:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
+          description: UTC time of the last validation run, or null if never validated.
+        imageUrl:
+          type: string
+          nullable: true
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+
+  responses:
+    BadRequest:
+      description: The request body is not valid JSON, or a field is missing or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "'releaseDate' must be a valid date in YYYY-MM-DD format."
+    Unauthorized:
+      description: The x-api-key header is missing or wrong.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: Missing or invalid API key.
+    NotFound:
+      description: No game has that id.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "Game with id '3f2b8c1e-5a47-4d0e-9c1b-7a6e2d4f8b90' not found."
+    ServerError:
+      description: Unexpected server error, or the server has no API key configured.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: Internal server error.
+    DatabaseUnavailable:
+      description: |
+        The database could not be reached, for example while it resumes after being idle.
+        Retrying after a short wait usually succeeds.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: Database temporarily unavailable. Please try again.
