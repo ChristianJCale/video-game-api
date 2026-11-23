@@ -84,3 +84,22 @@ Hard cutoff for any unfinished extra: Nov 29.
 - Deployment artifacts: Bicep files.
 - Report written in Google Docs, exported to Word or PDF for submission.
 - Slides due the same day as the project.
+
+## Update: Nov 22, 2026
+
+### Implemented
+- Azure SQL with managed-identity access (no database password), verified on Azure. Item is no longer "proposed".
+- UUIDs stored as UNIQUEIDENTIFIER and returned lowercase. `GET /api/games/{id}` added.
+
+### Behavior decisions
+- A non-UUID id returns 404, the same as an unknown id (midterm contract preserved).
+- Database unreachable returns 503; any other unexpected error returns a generic 500 (details only in logs).
+- PUT: `imageUrl` is optional (omit = keep, null = clear). `upcoming`, `isFree` and `validatedOn` are server-managed.
+- Validation: strict YYYY-MM-DD dates; price at most 2 decimal places and at most 99,999,999.99.
+
+### Extras
+- Frontend: GO as a scoped stretch (imageUrl only, no Blob uploads), build window Nov 29, hard cutoff Nov 29.
+- Azure Policy: audit-only assignments for required tags and allowed regions.
+
+### Still proposed (confirm before building)
+- Logic App on the Consumption plan; two-way `upcoming`/`isFree` fla- Logic App on the Consumptipcoming` and `GameMarkedFree`.
