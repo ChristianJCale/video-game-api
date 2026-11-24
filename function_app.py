@@ -7,6 +7,7 @@ import azure.functions as func
 
 import repository
 from validation import normalize_game_id, validate_game
+from keyvault_auth import get_api_key
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -21,20 +22,23 @@ def json_response(body, status_code=200):
 
 
 def check_api_key(req: func.HttpRequest):
-    """Check the x-api-key header.
+    """Check the x-api-key header against the api-key secret in Azure Key Vault.
 
     Returns None when the key is valid, otherwise an error response
-    (401 for a missing/wrong key, 500 if the server has no key configured).
-    The real key lives in the API_KEY app setting, never in the code.
+    (401 for a missing/wrong key, 500 if the key can't be read from Key Vault).
+    The key lives only in Key Vault, never in the code or an app setting.
     """
-    expected = os.environ.get("API_KEY")
-    if not expected:
-        # Fail closed: never allows access just because the setting is missing
-        return json_response({"error": "Server API key is not configured."}, 500)
-
     provided = req.headers.get("x-api-key")
     if not provided:
+        # Checked first so unauthenticated requests never cause a Key Vault call
         return json_response({"error": "Missing or invalid API key."}, 401)
+
+    try:
+        expected = get_api_key()
+    except Exception:
+        # Fail closed: never allow access just because the key couldn't be read
+        logging.exception("Could not read the API key from Key Vault")
+        return json_response({"error": "Server API key is not configured."}, 500)
 
     # compare_digest avoids leaking information through comparison timing
     if not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
