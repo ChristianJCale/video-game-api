@@ -7,9 +7,6 @@ info:
     with Azure SQL Database for persistent storage.
 
     Every request needs a valid `x-api-key` header.
-
-    Endpoints are added here as they are built. Still to come:
-    `PATCH /games/validate` (batch validation rules).
 servers:
   - url: https://{functionApp}/api
     description: Azure Function App
@@ -24,6 +21,8 @@ security:
 tags:
   - name: Games
     description: Create, read, update and delete games
+  - name: Validation
+    description: Batch rules that flag upcoming and free games
 
 paths:
   /games:
@@ -74,6 +73,40 @@ paths:
                 $ref: "#/components/schemas/Game"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/DatabaseUnavailable"
+
+  /games/validate:
+    patch:
+      tags: [Validation]
+      summary: Validate all games
+      description: |
+        Applies two rules to every game in one atomic step:
+
+        1. If `releaseDate` is after today (UTC), `upcoming` is set to true.
+        2. If `price` is 0, `isFree` is set to true.
+
+        Flags are set both ways: a flag whose condition no longer holds is cleared.
+        `validatedOn` is stamped on every game that was evaluated.
+
+        `updatedCount` counts only games whose `upcoming` or `isFree` value actually
+        changed, so running the endpoint twice in a row returns 0 the second time.
+        The request needs no body.
+      operationId: validateGames
+      responses:
+        "200":
+          description: The validation run finished.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationResult"
+              example:
+                updatedCount: 2
+                timestamp: "2026-11-24T18:30:00Z"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "500":
@@ -243,6 +276,18 @@ components:
         imageUrl:
           type: string
           nullable: true
+    ValidationResult:
+      type: object
+      required: [updatedCount, timestamp]
+      properties:
+        updatedCount:
+          type: integer
+          minimum: 0
+          description: Number of games whose `upcoming` or `isFree` value changed in this run.
+        timestamp:
+          type: string
+          format: date-time
+          description: UTC time of the run. Every evaluated game gets this value as `validatedOn`.
     Error:
       type: object
       properties:
