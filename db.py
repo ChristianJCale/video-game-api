@@ -8,7 +8,16 @@ from azure.identity import DefaultAzureCredential
 
 SQL_COPT_SS_ACCESS_TOKEN = 1256  # connection attribute defined by Microsoft's ODBC driver
 LOGIN_TIMEOUT_SECONDS = 60       # a paused serverless database can take about a minute to wake
-MAX_ATTEMPTS = 2
+MAX_ATTEMPTS = 4
+RETRY_DELAY_SECONDS = 15
+# 40613 = database paused/resuming; the others are transient Azure SQL errors
+TRANSIENT_CODES = ("40613", "40197", "40501", "49918", "49919", "49920")
+
+
+def _is_transient(exc):
+    return isinstance(exc, pyodbc.OperationalError) or any(
+        code in str(exc) for code in TRANSIENT_CODES
+    )
 
 _credential = DefaultAzureCredential()
 
@@ -42,8 +51,9 @@ def get_connection():
                 attrs_before={SQL_COPT_SS_ACCESS_TOKEN: token_struct},
                 timeout=LOGIN_TIMEOUT_SECONDS,
             )
-        except pyodbc.OperationalError as exc:
-            if attempt == MAX_ATTEMPTS:
+        except pyodbc.Error as exc:
+            if attempt == MAX_ATTEMPTS or not _is_transient(exc):
                 raise
-            logging.warning("SQL connection attempt %d failed (%s); retrying", attempt, exc)
-            time.sleep(5)
+            logging.warning("SQL connection attempt %d failed (%s); retrying in %ds",
+                            attempt, exc, RETRY_DELAY_SECONDS)
+            time.sleep(RETRY_DELAY_SECONDS)
