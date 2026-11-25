@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Video Game Library</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f4f5fa;
+      --card: #ffffff;
+      --text: #1c1e29;
+      --muted: #666c80;
+      --border: #e1e4ee;
+      --accent: #4f46e5;
+      --accent-text: #ffffff;
+      --danger: #c0392b;
+      --ok: #1d8a57;
+      --shadow: 0 1px 3px rgba(20, 22, 40, .08), 0 6px 18px rgba(20, 22, 40, .06);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #121420;
+        --card: #1b1e2d;
+        --text: #eceef8;
+        --muted: #9ba1b8;
+        --border: #2b2f43;
+        --accent: #8e8cff;
+        --accent-text: #12131f;
+        --danger: #ff7b6b;
+        --ok: #4cd694;
+        --shadow: 0 1px 3px rgba(0, 0, 0, .4), 0 6px 18px rgba(0, 0, 0, .3);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+    h1 { margin: 0 0 4px; font-size: 1.8rem; }
+    .subtitle { margin: 0 0 20px; color: var(--muted); }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: 2fr 1.4fr auto auto;
+      gap: 12px;
+      align-items: end;
+      padding: 16px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+    }
+    @media (max-width: 760px) { .toolbar { grid-template-columns: 1fr; } }
+    label { display: block; font-size: .85rem; color: var(--muted); margin-bottom: 4px; }
+    input {
+      width: 100%;
+      padding: 9px 11px;
+      font: inherit;
+      color: var(--text);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    button {
+      font: inherit;
+      padding: 9px 16px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      cursor: pointer;
+      background: var(--accent);
+      color: var(--accent-text);
+      font-weight: 600;
+    }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    button.ghost { background: transparent; color: var(--text); border-color: var(--border); font-weight: 500; }
+    button.ghost.danger { color: var(--danger); }
+    .hint { margin: 10px 2px 0; font-size: .82rem; color: var(--muted); }
+
+    .status { margin: 16px 0 0; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); }
+    .status.error { border-color: var(--danger); color: var(--danger); }
+    .status.ok { border-color: var(--ok); color: var(--ok); }
+    .count { margin: 22px 2px 10px; color: var(--muted); font-size: .9rem; }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 18px; }
+    .card {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+    }
+    .cover { aspect-ratio: 3 / 4; background: var(--border); }
+    .cover img, .placeholder { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .placeholder { display: grid; place-items: center; color: #fff; font-size: 2.4rem; font-weight: 700; letter-spacing: .05em; }
+    .body { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px 14px; flex: 1; }
+    .body h2 { margin: 0; font-size: 1.05rem; line-height: 1.25; overflow-wrap: anywhere; }
+    .dev, .meta { margin: 0; color: var(--muted); font-size: .88rem; }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
+    .price { font-weight: 700; }
+    .badges { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+    .badge { padding: 2px 8px; border-radius: 999px; font-size: .72rem; font-weight: 700; border: 1px solid currentColor; }
+    .badge.upcoming { color: var(--accent); }
+    .badge.free { color: var(--ok); }
+    .actions { display: flex; gap: 8px; margin-top: auto; padding-top: 10px; }
+    .actions button { flex: 1; padding: 6px 10px; font-size: .9rem; }
+
+    dialog {
+      width: min(460px, calc(100% - 32px));
+      padding: 20px;
+      color: var(--text);
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+    }
+    dialog::backdrop { background: rgba(10, 12, 24, .55); }
+    dialog h2 { margin: 0 0 14px; font-size: 1.2rem; }
+    .field { margin-bottom: 12px; }
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .preview { margin-top: 8px; display: flex; gap: 12px; align-items: center; }
+    .preview .thumb { width: 72px; aspect-ratio: 3 / 4; background: var(--border); border-radius: 6px; overflow: hidden; flex: none; }
+    .preview .thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .preview .note { font-size: .82rem; color: var(--muted); }
+    .dialog-error { margin: 0 0 12px; color: var(--danger); font-size: .9rem; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Video Game Library</h1>
+  <p class="subtitle">Browse and manage the games stored in the Video Game API.</p>
+
+  <noscript><p class="status error">This page needs JavaScript to run.</p></noscript>
+
+  <section class="toolbar" aria-label="Connection settings">
+    <div>
+      <label for="apiBase">API address</label>
+      <input id="apiBase" type="url" autocomplete="off" spellcheck="false">
+    </div>
+    <div>
+      <label for="apiKey">API key</label>
+      <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key">
+    </div>
+    <button id="loadBtn" type="button">Load games</button>
+    <button id="addBtn" type="button" disabled>Add game</button>
+  </section>
+  <p class="hint">Your key is kept in this page's memory only. It is never saved, and it is gone when you close or refresh the tab.</p>
+
+  <p id="status" class="status" role="status" aria-live="polite" hidden></p>
+
+  <p id="count" class="count"></p>
+  <section id="grid" class="grid" aria-label="Games"></section>
+</main>
+
+<dialog id="gameDialog">
+  <form id="gameForm">
+    <h2 id="dialogTitle">Add game</h2>
+    <p id="dialogError" class="dialog-error" role="alert" hidden></p>
+
+    <div class="field">
+      <label for="fTitle">Title</label>
+      <input id="fTitle" required maxlength="200">
+    </div>
+    <div class="field">
+      <label for="fDeveloper">Developer</label>
+      <input id="fDeveloper" required maxlength="200">
+    </div>
+    <div class="two field">
+      <div>
+        <label for="fDate">Release date</label>
+        <input id="fDate" type="date" required>
+      </div>
+      <div>
+        <label for="fPrice">Price (USD)</label>
+        <input id="fPrice" type="number" min="0" step="0.01" required>
+      </div>
+    </div>
+    <div class="field">
+      <label for="fImage">Image address (optional)</label>
+      <input id="fImage" type="url" maxlength="500" placeholder="https://..." autocomplete="off" spellcheck="false">
+      <div class="preview">
+        <div id="previewThumb" class="thumb"></div>
+        <span id="previewNote" class="note"></span>
+      </div>
+    </div>
+
+    <div class="dialog-actions">
+      <button id="cancelBtn" class="ghost" type="button">Cancel</button>
+      <button id="saveBtn" type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+  // Where the deployed API lives. You can change it in the page without editing this file.
+  const DEFAULT_API = "https://func-videogames-dev-001-fda9awdbawbddmeb.centralus-01.azurewebsites.net/api";
+
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    apiBase: $("apiBase"), apiKey: $("apiKey"), loadBtn: $("loadBtn"), addBtn: $("addBtn"),
+    status: $("status"), count: $("count"), grid: $("grid"),
+    dialog: $("gameDialog"), form: $("gameForm"), dialogTitle: $("dialogTitle"), dialogError: $("dialogError"),
+    fTitle: $("fTitle"), fDeveloper: $("fDeveloper"), fDate: $("fDate"), fPrice: $("fPrice"), fImage: $("fImage"),
+    previewThumb: $("previewThumb"), previewNote: $("previewNote"), cancelBtn: $("cancelBtn"), saveBtn: $("saveBtn"),
+  };
+
+  let apiKey = "";      // held in memory only; never stored anywhere
+  let games = [];
+  let editingId = null;
+
+  els.apiBase.value = DEFAULT_API;
+
+  // ---------- small helpers ----------
+  // Build DOM nodes without innerHTML, so text from the API can never run as HTML.
+  function el(tag, attrs = {}, ...children) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attrs)) {
+      if (key === "class") node.className = value;
+      else if (key === "text") node.textContent = value;
+      else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+      else node.setAttribute(key, value);
+    }
+    for (const child of children) if (child) node.append(child);
+    return node;
+  }
+
+  const isHttpUrl = (value) => typeof value === "string" && /^https?:\/\//i.test(value);
+  const formatPrice = (price) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(price);
+  const initials = (title) => title.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
+
+  function setStatus(message, kind = "info") {
+    els.status.textContent = message;
+    els.status.className = "status " + kind;
+    els.status.hidden = !message;
+  }
+
+  // ---------- talking to the API ----------
+  async function api(method, path, body) {
+    const base = els.apiBase.value.trim().replace(/\/+$/, "");
+    const headers = { "x-api-key": apiKey };
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+
+    let response;
+    try {
+      response = await fetch(base + path, {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+    } catch (networkError) {
+      throw new Error(
+        "Could not reach the API. Check the API address and your connection, and make sure this " +
+        "page's address is allowed in the Function App's CORS settings."
+      );
+    }
+
+    const text = await response.text();
+    let data = null;
+    if (text) {
+      try { data = JSON.parse(text); } catch (parseError) { data = null; }
+    }
+    if (!response.ok) {
+      const message = response.status === 401
+        ? "The API key was rejected. Check it and try again."
+        : (data && data.error) || "Request failed (HTTP " + response.status + ").";
+      const error = new Error(message);
+      error.status = response.status;
+      throw error;
+    }
+    return data;
+  }
+
+  // ---------- drawing the games ----------
+  function placeholder(title) {
+    const hue = [...title].reduce((sum, ch) => sum + ch.charCodeAt(0), 0) % 360;
+    const box = el("div", { class: "placeholder", "aria-hidden": "true" }, el("span", { text: initials(title) }));
+    box.style.background = "linear-gradient(135deg, hsl(" + hue + " 60% 45%), hsl(" + ((hue + 50) % 360) + " 60% 30%))";
+    return box;
+  }
+
+  function coverFor(game) {
+    const wrap = el("div", { class: "cover" });
+    if (isHttpUrl(game.imageUrl)) {
+      const img = el("img", { alt: "Cover image for " + game.title, loading: "lazy", referrerpolicy: "no-referrer" });
+      // If the image is missing or blocked, fall back to a coloured tile instead of a broken icon
+      img.addEventListener("error", () => img.replaceWith(placeholder(game.title)));
+      img.src = game.imageUrl;
+      wrap.append(img);
+    } else {
+      wrap.append(placeholder(game.title));
+    }
+    return wrap;
+  }
+
+  function card(game) {
+    const badges = el("div", { class: "badges" });
+    if (game.upcoming) {
+      badges.append(el("span", { class: "badge upcoming", text: "Upcoming", title: "Release date is in the future (set by the validation job)" }));
+    }
+    if (game.isFree) {
+      badges.append(el("span", { class: "badge free", text: "Free", title: "Price is 0 (set by the validation job)" }));
+    }
+    return el("article", { class: "card" },
+      coverFor(game),
+      el("div", { class: "body" },
+        el("h2", { text: game.title }),
+        el("p", { class: "dev", text: game.developer }),
+        el("p", { class: "meta", text: "Released " + game.releaseDate }),
+        el("div", { class: "row" }, el("span", { class: "price", text: formatPrice(game.price) }), badges),
+        el("div", { class: "actions" },
+          el("button", { type: "button", class: "ghost", text: "Edit", onclick: () => openDialog(game) }),
+          el("button", { type: "button", class: "ghost danger", text: "Delete", onclick: () => removeGame(game) })
+        )
+      )
+    );
+  }
+
+  function render() {
+    els.grid.replaceChildren(...games.map(card));
+    els.count.textContent = games.length === 1 ? "1 game" : games.length + " games";
+  }
+
+  async function refresh() {
+    games = await api("GET", "/games");
+    render();
+  }
+
+  function handleError(error) {
+    setStatus(error.message, "error");
+  }
+
+  // ---------- load / delete ----------
+  async function loadGames() {
+    apiKey = els.apiKey.value;
+    if (!apiKey) {
+      setStatus("Enter your API key first.", "error");
+      return;
+    }
+    els.loadBtn.disabled = true;
+    setStatus("Loading... the first request can take up to a minute if the database was idle.");
+    try {
+      await refresh();
+      els.addBtn.disabled = false;
+      setStatus(games.length ? "" : 'No games yet. Use "Add game" to create one.');
+    } catch (error) {
+      handleError(error);
+    } finally {
+      els.loadBtn.disabled = false;
+    }
+  }
+
+  async function removeGame(game) {
+    if (!confirm('Delete "' + game.title + '"? This cannot be undone.')) return;
+    try {
+      await api("DELETE", "/games/" + encodeURIComponent(game.id));
+      await refresh();
+      setStatus("Game deleted.", "ok");
+    } catch (error) {
+      handleError(error);
+    }
+  }
+
+  // ---------- add / edit dialog ----------
+  let previewTimer;
+
+  function updatePreview() {
+    const url = els.fImage.value.trim();
+    els.previewThumb.replaceChildren();
+    if (!url) {
+      els.previewNote.textContent = "Paste an image address to see a preview.";
+      return;
+    }
+    if (!isHttpUrl(url)) {
+      els.previewNote.textContent = "The address must start with http:// or https://";
+      return;
+    }
+    const img = el("img", { alt: "Preview of the image", referrerpolicy: "no-referrer" });
+    img.addEventListener("load", () => { els.previewNote.textContent = "Image loaded."; });
+    img.addEventListener("error", () => {
+      img.remove();
+      els.previewNote.textContent = "This image could not be loaded. Check the address.";
+    });
+    els.previewNote.textContent = "Loading preview...";
+    img.src = url;
+    els.previewThumb.append(img);
+  }
+
+  function openDialog(game = null) {
+    editingId = game ? game.id : null;
+    els.dialogTitle.textContent = game ? "Edit game" : "Add game";
+    els.fTitle.value = game ? game.title : "";
+    els.fDeveloper.value = game ? game.developer : "";
+    els.fDate.value = game ? game.releaseDate : "";
+    els.fPrice.value = game ? String(game.price) : "";
+    els.fImage.value = game && game.imageUrl ? game.imageUrl : "";
+    els.dialogError.hidden = true;
+    updatePreview();
+    els.dialog.showModal();
+  }
+
+  els.fImage.addEventListener("input", () => {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(updatePreview, 400);
+  });
+
+  els.form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const wasEdit = editingId !== null;
+    const image = els.fImage.value.trim();
+    const body = {
+      title: els.fTitle.value.trim(),
+      developer: els.fDeveloper.value.trim(),
+      releaseDate: els.fDate.value,
+      price: els.fPrice.value === "" ? "" : Number(els.fPrice.value),
+    };
+    // On edit, an empty box clears the image (null). On create, an empty box just leaves it out.
+    if (wasEdit) body.imageUrl = image || null;
+    else if (image) body.imageUrl = image;
+
+    els.saveBtn.disabled = true;
+    els.dialogError.hidden = true;
+    try {
+      if (wasEdit) await api("PUT", "/games/" + encodeURIComponent(editingId), body);
+      else await api("POST", "/games", body);
+    } catch (error) {
+      els.dialogError.textContent = error.message;
+      els.dialogError.hidden = false;
+      els.saveBtn.disabled = false;
+      return;
+    }
+    els.saveBtn.disabled = false;
+    els.dialog.close();
+    try {
+      await refresh();
+      setStatus(wasEdit ? "Game updated." : "Game added.", "ok");
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+  els.cancelBtn.addEventListener("click", () => els.dialog.close());
+  els.loadBtn.addEventListener("click", loadGames);
+  els.addBtn.addEventListener("click", () => openDialog());
+  els.apiKey.addEventListener("keydown", (event) => { if (event.key === "Enter") loadGames(); });
+</script>
+</body>
+</html>
