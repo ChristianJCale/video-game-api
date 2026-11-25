@@ -5,12 +5,13 @@ dictionaries in the same JSON shape the API has always used.
 """
 import uuid
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pyodbc
 
 from db import get_connection
+from telemetry import sql_span
 
 # One column list, used by every SELECT, so rows always unpack the same way
 COLUMNS = "id, title, developer, releaseDate, price, upcoming, isFree, validatedOn, imageUrl"
@@ -26,26 +27,28 @@ def _transaction():
 
     Commits when the block succeeds, rolls back when it fails, and always closes
     the connection. Connection failures become DatabaseUnavailableError so the
-    API can answer 503 instead of a generic 500.
+    API can answer 503 instead of a generic 500. The whole block runs inside a
+    SQL dependency span so Application Insights can show the database call.
     """
-    try:
-        conn = get_connection()
-    except pyodbc.OperationalError as exc:
-        raise DatabaseUnavailableError(str(exc)) from exc
-
-    try:
-        yield conn.cursor()
-        conn.commit()
-    except Exception as exc:
+    with sql_span():
         try:
-            conn.rollback()
-        except Exception:
-            pass  # the connection may already be gone
-        if isinstance(exc, pyodbc.OperationalError):
+            conn = get_connection()
+        except pyodbc.Error as exc:
             raise DatabaseUnavailableError(str(exc)) from exc
-        raise
-    finally:
-        conn.close()
+
+        try:
+            yield conn.cursor()
+            conn.commit()
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass  # the connection may already be gone
+            if isinstance(exc, pyodbc.OperationalError):
+                raise DatabaseUnavailableError(str(exc)) from exc
+            raise
+        finally:
+            conn.close()
 
 
 def _row_to_game(row):
@@ -139,3 +142,55 @@ def delete_game(game_id):
     with _transaction() as cursor:
         cursor.execute("DELETE FROM games WHERE id = ?", [game_id])
         return cursor.rowcount > 0
+
+
+def format_timestamp(moment):
+    """UTC datetime -> '2026-11-24T18:30:00Z', the same format validatedOn uses in API responses."""
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def changes_from_rows(rows):
+    """Turn (id, old_upcoming, new_upcoming, old_isFree, new_isFree) rows into a list of changes.
+
+    One entry per flag whose stored value actually changed, e.g.
+    {"gameId": "...", "rule": "upcoming", "value": True}. Rows where nothing
+    changed produce no entries.
+    """
+    changes = []
+    for game_id, old_upcoming, new_upcoming, old_free, new_free in rows:
+        game_id = str(game_id).lower()
+        if bool(old_upcoming) != bool(new_upcoming):
+            changes.append({"gameId": game_id, "rule": "upcoming", "value": bool(new_upcoming)})
+        if bool(old_free) != bool(new_free):
+            changes.append({"gameId": game_id, "rule": "free", "value": bool(new_free)})
+    return changes
+
+
+def validate_all_games():
+    """Apply both validation rules to every game, atomically (one UPDATE statement).
+
+    Rule 1: upcoming = the release date is after today (UTC date).
+    Rule 2: isFree   = the price is 0.
+    Flags are set both ways, so they can't go stale, and validatedOn is stamped
+    on every game that was evaluated.
+
+    Returns (timestamp, evaluated, changes):
+      timestamp - the UTC run time as an ISO 8601 string ending in Z
+      evaluated - how many games were looked at
+      changes   - one entry per flag that actually changed (see changes_from_rows)
+    """
+    # validatedOn is DATETIME2(0), so drop the microseconds to make the stored
+    # value identical to the timestamp we return
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    with _transaction() as cursor:
+        cursor.execute(
+            "UPDATE games SET "
+            "upcoming = CASE WHEN releaseDate > ? THEN 1 ELSE 0 END, "
+            "isFree = CASE WHEN price = 0 THEN 1 ELSE 0 END, "
+            "validatedOn = ? "
+            "OUTPUT inserted.id, deleted.upcoming, inserted.upcoming, "
+            "deleted.isFree, inserted.isFree",
+            [now.date(), now.replace(tzinfo=None)],
+        )
+        rows = cursor.fetchall()
+    return format_timestamp(now), len(rows), changes_from_rows(rows)

@@ -1,6 +1,7 @@
-# Uncomment to enable Azure Monitor OpenTelemetry
+# Azure Monitor OpenTelemetry: sends logs, requests and custom events to Application Insights
 # Ref: aka.ms/functions-azure-monitor-python
-# azure-monitor-opentelemetry
+azure-monitor-opentelemetry
+azure-monitor-events-extension
 
 azure-functions
 pyodbc

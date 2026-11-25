@@ -8,6 +8,7 @@ import azure.functions as func
 import repository
 from validation import normalize_game_id, validate_game
 from keyvault_auth import get_api_key
+from telemetry import emit_event
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -79,7 +80,10 @@ def create_game(req: func.HttpRequest) -> func.HttpResponse:
         return json_response({"error": error}, 400)
 
     # The server generates the UUID; upcoming, isFree and validatedOn start at their defaults
-    return json_response(repository.create_game(data), 201)
+    game = repository.create_game(data)
+    logging.info("game_created gameId=%s", game["id"], extra={"gameId": game["id"]})
+    emit_event("GameCreated", {"gameId": game["id"]})
+    return json_response(game, 201)
 
 
 def list_games(req: func.HttpRequest) -> func.HttpResponse:
@@ -158,3 +162,52 @@ def games_item(req: func.HttpRequest) -> func.HttpResponse:
         return delete_game(game_id)
     except Exception as exc:
         return error_response_for(exc)
+
+
+# Route for the validation job: /api/games/validate
+# Only PATCH is registered here, so it never collides with games/{id} (GET, PUT, DELETE).
+EVENT_FOR_RULE = {"upcoming": "GameMarkedUpcoming", "free": "GameMarkedFree"}
+
+
+@app.route(route="games/validate", methods=["PATCH"])
+def games_validate(req: func.HttpRequest) -> func.HttpResponse:
+    """PATCH /api/games/validate -- apply the two validation rules to every game.
+
+    Rule 1: release date after today (UTC) -> upcoming.  Rule 2: price 0 -> isFree.
+    Responds with how many games actually changed and the UTC time of the run.
+    """
+    auth_error = check_api_key(req)
+    if auth_error:
+        return auth_error
+
+    logging.info("validation_triggered")
+    emit_event("ValidationTriggered", {})
+
+    try:
+        timestamp, evaluated, changes = repository.validate_all_games()
+    except Exception as exc:
+        return error_response_for(exc)
+
+    for change in changes:
+        # key=value text so it reads well in a log stream; `extra` makes each key a
+        # separate custom dimension in Application Insights
+        logging.info(
+            "game_flag_changed gameId=%s rule=%s flagValue=%s",
+            change["gameId"], change["rule"], change["value"],
+            extra={"gameId": change["gameId"], "rule": change["rule"], "flagValue": change["value"]},
+        )
+        # Events record a game being marked; a flag clearing is logged but not an event
+        if change["value"]:
+            emit_event(EVENT_FOR_RULE[change["rule"]],
+                       {"gameId": change["gameId"], "rule": change["rule"]})
+
+    # A game with both flags changing is still one updated game
+    updated_count = len({change["gameId"] for change in changes})
+    logging.info(
+        "validation_completed evaluated=%d updatedCount=%d timestamp=%s",
+        evaluated, updated_count, timestamp,
+        extra={"evaluated": evaluated, "updatedCount": updated_count, "timestamp": timestamp},
+    )
+    emit_event("ValidationCompleted",
+               {"evaluated": evaluated, "updatedCount": updated_count, "timestamp": timestamp})
+    return json_response({"updatedCount": updated_count, "timestamp": timestamp}, 200)
