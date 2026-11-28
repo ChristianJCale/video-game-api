@@ -1,6 +1,6 @@
 # Design Decisions: Final Project
 
-Recorded Nov 16, 2026. Last updated Nov 25, 2026. Final project due Dec 4, 2026 (target submission Dec 3).
+Recorded Nov 16, 2026. Last updated Nov 27, 2026. Final project due Dec 4, 2026 (target submission Dec 3).
 No decisions are still marked **proposed**. The tables below show the current state; the dated updates at the end record how each decision was made and what was built.
 
 ## Core architecture
@@ -44,8 +44,9 @@ No decisions are still marked **proposed**. The tables below show the current st
 |---|---|
 | Logic App trigger | Manual ("When an HTTP request is received", started with Run trigger) |
 | Logic App plan | Consumption (confirmed Nov 25). Standard has a fixed hosting cost and nothing in the requirements needs it |
-| Workflow | Trigger, Key Vault "Get secret", HTTP `PATCH /api/games/validate` with the secret as `x-api-key`, then an Outlook email with `updatedCount` and `timestamp` |
-| Notification | Office 365 Outlook "Send an email (V2)" using the school account; success path built, failure path still to add |
+| Workflow | Trigger, Key Vault "Get secret", HTTP `PATCH /api/games/validate` with the secret as `x-api-key`, then two parallel branches: a success email, and a failure email followed by a Terminate action |
+| Notification | Office 365 Outlook "Send an email (V2)" using the school account. Success email carries `updatedCount` and `timestamp`; failure email carries the run ID and UTC time, never the HTTP response |
+| Failure handling | The failure branch runs after the HTTP action has failed or timed out, and ends with Terminate (status Failed, code `ValidationFailed`) so a handled failure still counts as a failed run |
 | Secrets in run history | Secure Inputs and Secure Outputs on the Get secret and HTTP actions |
 | Custom events | `ValidationTriggered`, `ValidationCompleted`, `GameCreated`, `GameMarkedUpcoming`, `GameMarkedFree` (replace `GameArchived`) |
 | Event granularity | One event per record changed, with game ID and rule name as properties |
@@ -67,8 +68,8 @@ A new dashboard separate from the earlier `Cloud Cost Monitor` dashboard, which 
 
 ## Governance features (for the report)
 
-1. API key management: rotation without editing the workflow.
-2. Diagnostic logging: tracing a failed validation run.
+1. API key management: rotation without editing the workflow. Tested Nov 27 (see below).
+2. Diagnostic logging: tracing a failed validation run. Tested Nov 27 with a forced failure (see below).
 
 ## Extras
 
@@ -170,10 +171,39 @@ Hard cutoff for any unfinished extra: Nov 29.
 - New dashboard `FinalProject-ChristianCale`. The older `Cloud Cost Monitor` dashboard is left unchanged and not used.
 - Tiles are pinned from each resource's own Metrics or Logs page so each keeps the right scope.
 
+## Update: Nov 27, 2026
+
+### Implemented: Logic App failure path
+- The failure email is a parallel branch after the HTTP action, not a step after the success email, so each outcome has its own path.
+- Run after is set to **has failed** and **has timed out** only. It never runs when the HTTP call succeeds.
+- Email subject `Video Game API validation FAILED`. The body holds the run ID (`workflow()['run']['name']`), the UTC time (`utcNow()`) and a pointer to the run history and Application Insights. It does not include the HTTP response: Secure Outputs hides it, and a failed call should not be mailed around.
+- A **Terminate** action follows the failure email (status Failed, code `ValidationFailed`, message `PATCH /games/validate failed`). Without it the run ends as Succeeded because the failure was handled, and the dashboard's "Runs Failed" tile would miss it.
+- The HTTP action retries 5xx responses by default, so the failure email arrives a few minutes after the failure, not immediately.
+
+### Tested: key rotation (governance feature 1)
+- Rotated the `api-key` secret in Key Vault by creating a new secret version. No code, app setting or Logic App change, and no redeploy.
+- After the 60-second cache window, the old key was rejected with 401 and the new key was accepted with 200.
+- The published Logic App ran again with no edits and still reached the API, because Get secret reads the current secret version on every run.
+- The `api_key_refreshed secretVersion=...` log line in Application Insights shows the version change. It logs the version ID, never the value.
+- The person rotating the key needs a data-plane role that can write secrets (Key Vault Secrets Officer). The Function App and Logic App identities keep read-only Secrets User.
+- Neither key was printed: values were held in shell variables and `az ... --query id` was used instead of echoing the secret.
+
+### Tested: forced failure (governance feature 2)
+- Method: set the Function App's `SQL_DATABASE` setting to a database name that does not exist, then call `PATCH /games/validate` directly and through the Logic App.
+- Chosen over a wrong API key because a bad key only produces a 401 with nothing behind it. A bad database name produces a 503, a logged exception and a failed SQL dependency, so one failure can be traced end to end.
+- Restored `SQL_DATABASE=sqldb-videogames` straight afterwards, confirmed with a `GET /games` returning 200, and ran the Logic App once more for a green published run.
+- Changing app settings with `az` is done with `-o none`: without it the command prints every app setting, including the storage connection string.
+
+### Evidence captured in Application Insights
+- **Live Metrics** while `validate_tests.sh` ran, showing request rate and sample telemetry.
+- **Custom event:** `customEvents` rows for `ValidationTriggered`, `ValidationCompleted` and the per-game `GameMarked...` events, with their custom dimensions.
+- **Failed request:** `requests` filtered to `success == false`, then the whole operation joined by `operation_Id` across requests, dependencies, exceptions and traces, which traces one failed validation run from request to database error.
+- **SQL dependency:** `dependencies` rows for the `azure-sql` client span (`db.system = mssql`), successful during normal runs and failed during the forced failure.
+- **Logic App:** the failed run (HTTP red, failure email green, Terminate shows Failed), the failure email, and a later green published run.
+
 ### Still open
-- Run the published Logic App version once (a run without the Draft tag) and capture the run history and email as evidence.
-- Add the failure-path email (runs after the HTTP action has failed or timed out).
-- Confirm the resource-group budget and its email alert exist, then pin the cost view.
-- Pin the remaining dashboard tiles.
-- Update the README for `PATCH /games/validate`, the new fields, the 503 response and telemetry.
-- Frontend stretch: build window Nov 29.
+- Pin the remaining dashboard tiles and the cost view to `FinalProject-ChristianCale`; confirm the resource-group budget has its email recipient.
+- Confirm the README covers `PATCH /games/validate`, the new fields, the 503 response and telemetry.
+- Frontend stretch: build window Nov 29, hard cutoff Nov 29.
+- Open a pull request from `final-project` before Dec 3 and merge it, so the linked work items close.
+- Report and slides.
